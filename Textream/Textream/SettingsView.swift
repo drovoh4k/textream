@@ -1061,6 +1061,10 @@ struct SettingsView: View {
                         RoundedRectangle(cornerRadius: 8)
                             .fill(Color.primary.opacity(0.04))
                     )
+
+                    Divider()
+
+                    prompterLayoutControls
                 }
 
                 Divider()
@@ -1129,6 +1133,7 @@ struct SettingsView: View {
     @State private var availableScreens: [NSScreen] = []
 
     private var externalTab: some View {
+        ScrollView(.vertical, showsIndicators: false) {
         VStack(alignment: .leading, spacing: 14) {
             Text("Show the teleprompter on an external display or Sidecar iPad.")
                 .font(.system(size: 11))
@@ -1177,10 +1182,14 @@ struct SettingsView: View {
                     onRefresh: { refreshScreens() },
                     emptyMessage: "No external displays detected. Connect a display or enable Sidecar."
                 )
+
+                Divider()
+
+                prompterLayoutControls
             }
-            Spacer()
         }
         .padding(16)
+        }
         .onAppear { refreshScreens() }
     }
 
@@ -1423,6 +1432,64 @@ struct SettingsView: View {
 
     // MARK: - Shared Components
 
+    /// Layout of the prompter shown fullscreen or on an external display.
+    private var prompterLayoutControls: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Layout of the fullscreen and external display prompter.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+
+            prompterSlider(
+                title: "Side Margins",
+                value: $settings.prompterSideMargin,
+                range: NotchSettings.sideMarginRange,
+                step: 0.01,
+                help: "Empty space kept on each side of the prompt, as a share of the display width. Higher values narrow the text column so it reads closer to the center."
+            )
+
+            prompterSlider(
+                title: "Reading Line Height",
+                value: $settings.prompterReadingLineHeight,
+                range: NotchSettings.readingLineHeightRange,
+                step: 0.05,
+                help: "Where the line you are reading sits, measured from the top of the display. Raise it to push the whole script further down."
+            )
+
+            prompterSlider(
+                title: "Text Size",
+                value: $settings.prompterTextScale,
+                range: NotchSettings.textScaleRange,
+                step: 0.05,
+                help: "Scales the text size the prompter picks for the display; 100% is the automatic size."
+            )
+        }
+    }
+
+    private func prompterSlider(
+        title: String,
+        value: Binding<Double>,
+        range: ClosedRange<Double>,
+        step: Double,
+        help: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(title)
+                    .font(.system(size: 13, weight: .medium))
+                Spacer()
+                Text("\(Int((value.wrappedValue * 100).rounded()))%")
+                    .font(.system(size: 12, weight: .regular, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+
+            Slider(value: value, in: range, step: step)
+
+            Text(help)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+    }
+
     private func displayPicker(
         screens: [NSScreen],
         selectedID: Binding<UInt32>,
@@ -1527,6 +1594,9 @@ struct SettingsView: View {
         settings.overlayTransparencyOpacity = 0.85
         settings.followCursorWhenUndocked = false
         settings.fullscreenScreenID = 0
+        settings.prompterSideMargin = NotchSettings.defaultSideMargin
+        settings.prompterReadingLineHeight = NotchSettings.defaultReadingLineHeight
+        settings.prompterTextScale = NotchSettings.defaultTextScale
         settings.externalDisplayMode = .off
         settings.externalScreenID = 0
         settings.mirrorAxis = .horizontal

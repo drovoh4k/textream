@@ -461,6 +461,23 @@ class NotchSettings {
         didSet { UserDefaults.standard.set(Int(fullscreenScreenID), forKey: "fullscreenScreenID") }
     }
 
+    /// Side margin of the fullscreen / external prompter, as a fraction of the display width (per side).
+    /// Larger values narrow the text column so the prompt reads closer to the center of the screen.
+    var prompterSideMargin: Double {
+        didSet { UserDefaults.standard.set(prompterSideMargin, forKey: "prompterSideMargin") }
+    }
+
+    /// Height of the reading line in the fullscreen / external prompter, as a fraction of the
+    /// display height. 0.5 keeps the active word centered; higher values push the script down.
+    var prompterReadingLineHeight: Double {
+        didSet { UserDefaults.standard.set(prompterReadingLineHeight, forKey: "prompterReadingLineHeight") }
+    }
+
+    /// Multiplier applied to the text size the fullscreen / external prompter picks for the display.
+    var prompterTextScale: Double {
+        didSet { UserDefaults.standard.set(prompterTextScale, forKey: "prompterTextScale") }
+    }
+
     var browserServerEnabled: Bool {
         didSet {
             UserDefaults.standard.set(browserServerEnabled, forKey: "browserServerEnabled")
@@ -487,6 +504,25 @@ class NotchSettings {
         fontFamilyPreset.font(size: fontSizePreset.pointSize)
     }
 
+    /// Horizontal padding, in points, for a prompter laid out in `width` points.
+    func prompterHorizontalPadding(forWidth width: CGFloat) -> CGFloat {
+        width * CGFloat(NotchSettings.clamp(prompterSideMargin, to: NotchSettings.sideMarginRange))
+    }
+
+    /// Height of the reading line, as a fraction of the prompter height.
+    var prompterReadingAnchorFraction: CGFloat {
+        CGFloat(NotchSettings.clamp(prompterReadingLineHeight, to: NotchSettings.readingLineHeightRange))
+    }
+
+    /// Multiplier for the prompter text size.
+    var prompterTextScaleFactor: CGFloat {
+        CGFloat(NotchSettings.clamp(prompterTextScale, to: NotchSettings.textScaleRange))
+    }
+
+    private static func clamp(_ value: Double, to range: ClosedRange<Double>) -> Double {
+        min(max(value, range.lowerBound), range.upperBound)
+    }
+
     static let defaultWidth: CGFloat = 340
     static let defaultHeight: CGFloat = 150
     static let defaultLocale: String = SpeechLocaleSupport.closestSupportedLocale(to: Locale.current.identifier)?.identifier
@@ -496,6 +532,20 @@ class NotchSettings {
     static let maxWidth: CGFloat = 500
     static let minHeight: CGFloat = 100
     static let maxHeight: CGFloat = 400
+
+    /// Allowed range for `prompterSideMargin`, as a fraction of the display width.
+    static let sideMarginRange: ClosedRange<Double> = 0...0.35
+    static let defaultSideMargin: Double = 0.08
+
+    /// Allowed range for `prompterReadingLineHeight`, as a fraction of the display height.
+    static let readingLineHeightRange: ClosedRange<Double> = 0.1...0.95
+    static let defaultReadingLineHeight: Double = 0.5
+    /// Seed used when the display was previously set to the Near Top reading position.
+    static let nearTopReadingLineHeight: Double = 0.15
+
+    /// Allowed range for `prompterTextScale`.
+    static let textScaleRange: ClosedRange<Double> = 0.5...2.0
+    static let defaultTextScale: Double = 1.0
 
     init() {
         let savedWidth = UserDefaults.standard.double(forKey: "notchWidth")
@@ -540,6 +590,27 @@ class NotchSettings {
         self.autoNextPageDelay = savedDelay > 0 ? savedDelay : 3
         let savedFullscreenScreenID = UserDefaults.standard.integer(forKey: "fullscreenScreenID")
         self.fullscreenScreenID = UInt32(savedFullscreenScreenID)
+        self.prompterSideMargin = NotchSettings.clamp(
+            UserDefaults.standard.object(forKey: "prompterSideMargin") as? Double
+                ?? NotchSettings.defaultSideMargin,
+            to: NotchSettings.sideMarginRange
+        )
+        // The prompter's reading line replaces the Centered / Near Top preset, so seed it from
+        // that preset the first time, instead of silently re-centering a Near Top script.
+        let savedReadingPositionValue = UserDefaults.standard.string(forKey: "readingPosition") ?? ""
+        let seededReadingLineHeight = savedReadingPositionValue == ReadingPosition.nearTop.rawValue
+            ? NotchSettings.nearTopReadingLineHeight
+            : NotchSettings.defaultReadingLineHeight
+        self.prompterReadingLineHeight = NotchSettings.clamp(
+            UserDefaults.standard.object(forKey: "prompterReadingLineHeight") as? Double
+                ?? seededReadingLineHeight,
+            to: NotchSettings.readingLineHeightRange
+        )
+        self.prompterTextScale = NotchSettings.clamp(
+            UserDefaults.standard.object(forKey: "prompterTextScale") as? Double
+                ?? NotchSettings.defaultTextScale,
+            to: NotchSettings.textScaleRange
+        )
         self.browserServerEnabled = UserDefaults.standard.object(forKey: "browserServerEnabled") as? Bool ?? false
         let savedPort = UserDefaults.standard.integer(forKey: "browserServerPort")
         self.browserServerPort = (1024..<Int(UInt16.max)).contains(savedPort) ? UInt16(savedPort) : 7373

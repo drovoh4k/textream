@@ -92,6 +92,9 @@ The Textream companion for iPhone and iPad is part of the same universal App Sto
 #### Fullscreen options
 
 - **Display selection** — Choose which screen to show the fullscreen teleprompter on.
+- **Side margins** — Reserve 0–35% of the display width on each side (8% by default) so the text column narrows and the prompt reads closer to the center. Shared with the external display prompter.
+- **Reading line height** — Set where the line you are reading sits, from 10% to 95% of the display height (50%, centered, by default). Raise it to push the whole script further down the screen. On the fullscreen and external prompter this replaces the Centered / Near Top reading position, and in classic and voice-activated modes it also sets where the scrolling line rests — 95% keeps it at the bottom of the display, as before.
+- **Text size** — Scale the prompter text between 50% and 200% of the size it picks automatically for the display.
 - **Esc to stop** — Press the Escape key to dismiss the fullscreen overlay.
 
 ### Size
@@ -117,6 +120,7 @@ The Textream companion for iPhone and iPad is part of the same universal App Sto
 
 - **Mirror axis** — Horizontal (standard for mirrors), Vertical, or Both (180° rotation).
 - **Target display** — Pick from connected external displays and Sidecar iPads.
+- **Side margins**, **reading line height** and **text size** — The same prompter layout controls used by the fullscreen mode; both prompters share them.
 - **Hide from screen share** — Hides the overlay from screen recordings and video calls.
 
 ### Remote Connection

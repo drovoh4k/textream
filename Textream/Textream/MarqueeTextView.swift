@@ -135,6 +135,9 @@ struct SpeechScrollView: View {
 
     var isListening: Bool = true
     var readingPosition: ReadingPosition = .centered
+    /// Continuous reading anchor, as a fraction of the viewport height. When set it takes over
+    /// from `readingPosition`; the fullscreen / external prompter drives it from its own setting.
+    var readingAnchorFraction: CGFloat? = nil
     /// Optional preview-only transition. Live overlays keep their existing behavior.
     var readingPositionTransitionDuration: Double? = nil
     var paragraphBreakBeforeWordIndices: Set<Int> = []
@@ -257,6 +260,7 @@ struct SpeechScrollView: View {
                 anchoredParagraphBreakBeforeWordIndices = []
             }
             .onChange(of: readingPosition) { _, _ in
+                guard readingAnchorFraction == nil else { return }
                 manualOffset = 0
                 stableTopLineCenter = nil
                 stableLineAdvance = nil
@@ -286,6 +290,25 @@ struct SpeechScrollView: View {
                         recalculateTracking(containerHeight: containerHeight)
                     }
                 }
+            }
+            .onChange(of: readingAnchorFraction) { _, _ in
+                manualOffset = 0
+                hasAppliedTrackingTarget = false
+                allowsNextBackwardTrackingUpdate = false
+                recalculateTracking(containerHeight: containerHeight)
+            }
+            .onChange(of: font.pointSize) { _, _ in
+                // Only the anchored prompter re-anchors on a live text-size change. The notch
+                // and floating overlays must keep their Near Top row metrics, which may only be
+                // measured from the top of the document.
+                guard readingAnchorFraction != nil else { return }
+                manualOffset = 0
+                hasAppliedTrackingTarget = false
+                allowsNextBackwardTrackingUpdate = false
+                // Re-anchor once the relaid-out word positions arrive, the same way a page
+                // switch does; the width is unchanged, so nothing else would trigger it.
+                anchoredLayoutWidth = 0
+                recalculateTracking(containerHeight: containerHeight)
             }
             .onAppear {
                 containerHeight = geo.size.height
@@ -351,7 +374,7 @@ struct SpeechScrollView: View {
         .clipped()
         .mask(
             LinearGradient(
-                stops: readingPosition == .nearTop
+                stops: readingPosition == .nearTop && readingAnchorFraction == nil
                     ? [
                         .init(color: .white, location: 0),
                         .init(color: .white, location: 0.05),
@@ -372,6 +395,10 @@ struct SpeechScrollView: View {
     }
 
     private func initialScrollOffset(containerHeight: CGFloat) -> CGFloat {
+        if let fraction = readingAnchorFraction {
+            let lineHeight = font.pointSize * 1.4
+            return containerHeight * fraction - lineHeight * 0.5
+        }
         switch readingPosition {
         case .centered:
             let lineHeight = font.pointSize * 1.4
@@ -382,6 +409,11 @@ struct SpeechScrollView: View {
     }
 
     private func recalculateTracking(containerHeight: CGFloat) {
+        if let fraction = readingAnchorFraction {
+            recalcAtAnchor(containerHeight * fraction)
+            return
+        }
+
         if readingPosition == .nearTop {
             recalcTopWithPreviousLine()
             return
@@ -409,6 +441,23 @@ struct SpeechScrollView: View {
         }
     }
 
+    /// Keep the word being read at an explicit height inside the viewport.
+    private func recalcAtAnchor(_ anchorY: CGFloat) {
+        if smoothScroll {
+            let wordIdx = Int(smoothWordProgress)
+            let fraction = smoothWordProgress - Double(wordIdx)
+            let clampedIdx = max(0, min(wordIdx, words.count - 1))
+            guard let wordY = wordYPositions[clampedIdx] else { return }
+            let nextY = wordYPositions[clampedIdx + 1] ?? wordY
+            let interpolatedY = wordY + (nextY - wordY) * CGFloat(fraction)
+            applyTrackingTarget(anchorY - interpolatedY)
+        } else {
+            let wordIdx = activeWordIndex()
+            guard let wordY = wordYPositions[wordIdx] else { return }
+            applyTrackingTarget(anchorY - wordY)
+        }
+    }
+
     private func recalcTopWithPreviousLine() {
         if smoothScroll {
             let wordIdx = Int(smoothWordProgress)
@@ -431,11 +480,15 @@ struct SpeechScrollView: View {
         guard let wordY = wordYPositions[wordIndex] else { return }
 
         let target: CGFloat
-        switch readingPosition {
-        case .centered:
-            target = containerHeight * 0.5 - wordY
-        case .nearTop:
-            target = min(wordY, topReadingAnchor) - wordY
+        if let fraction = readingAnchorFraction {
+            target = containerHeight * fraction - wordY
+        } else {
+            switch readingPosition {
+            case .centered:
+                target = containerHeight * 0.5 - wordY
+            case .nearTop:
+                target = min(wordY, topReadingAnchor) - wordY
+            }
         }
 
         applyTrackingTarget(target, force: true)
@@ -514,11 +567,15 @@ struct SpeechScrollView: View {
     /// Find the word progress at the current visual position (scrollOffset + manualOffset)
     private func wordProgressAtCurrentOffset() -> Double {
         let trackingY: CGFloat
-        switch readingPosition {
-        case .centered:
-            trackingY = containerHeight * 0.5
-        case .nearTop:
-            trackingY = topReadingAnchor
+        if let fraction = readingAnchorFraction {
+            trackingY = containerHeight * fraction
+        } else {
+            switch readingPosition {
+            case .centered:
+                trackingY = containerHeight * 0.5
+            case .nearTop:
+                trackingY = topReadingAnchor
+            }
         }
         let targetY = trackingY - (scrollOffset + manualOffset)
 

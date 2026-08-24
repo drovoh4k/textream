@@ -219,10 +219,27 @@ struct ExternalDisplayView: View {
         }
     }
 
+    /// Minimum width kept for the waveform / mic row, so wide side margins never squeeze it.
+    private static let minimumControlsWidth: CGFloat = 360
+
     private var prompterView: some View {
         GeometryReader { geo in
-            let fontSize = max(48, min(96, geo.size.width / 14))
-            let hPad = max(40, geo.size.width * 0.08)
+            let hPad = NotchSettings.shared.prompterHorizontalPadding(forWidth: geo.size.width)
+            let columnWidth = max(1, geo.size.width - hPad * 2)
+            // Wide side margins narrow the column, so the automatic size is capped by the column
+            // too: that keeps roughly eight characters per line, so long words do not spill into
+            // the margins. At the default margin the screen-width term wins and the size is
+            // unchanged. Scaling the text past that cap is the reader's call.
+            let columnFontCap = columnWidth / 8
+            let autoFontSize = max(
+                min(48, columnFontCap),
+                min(min(96, geo.size.width / 14), columnFontCap)
+            )
+            let fontSize = autoFontSize * NotchSettings.shared.prompterTextScaleFactor
+            let controlsPad = min(
+                hPad,
+                max(0, (geo.size.width - Self.minimumControlsWidth) / 2)
+            )
 
             VStack(spacing: 0) {
                 Spacer().frame(height: 20)
@@ -252,6 +269,7 @@ struct ExternalDisplayView: View {
                     smoothWordProgress: timerWordProgress,
                     isListening: isEffectivelyListening,
                     readingPosition: NotchSettings.shared.readingPosition,
+                    readingAnchorFraction: NotchSettings.shared.prompterReadingAnchorFraction,
                     paragraphBreakBeforeWordIndices: NotchSettings.shared.showParagraphDividers
                         ? content.paragraphBreakBeforeWordIndices
                         : []
@@ -299,7 +317,7 @@ struct ExternalDisplayView: View {
                         .buttonStyle(.plain)
                     }
                 }
-                .padding(.horizontal, hPad)
+                .padding(.horizontal, controlsPad)
                 .padding(.bottom, 40)
             }
         }
