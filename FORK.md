@@ -1,72 +1,76 @@
-# Este fork
+# About this fork
 
-Fork de [`f/textream`](https://github.com/f/textream) con cambios propios en el teleprompter,
-compilación local en un comando y builds automáticas en GitHub Actions.
+This repository is a fork of [`f/textream`](https://github.com/f/textream) by Fatih Kadir Akın.
+Textream itself — the app, the design, the teleprompter engine — is his work; this fork only adds
+a few settings, a local build script, and the automation that keeps it in sync with upstream and
+publishes builds.
 
-## Qué añade respecto al upstream
+## What this fork adds
 
-**Controles de layout del prompter** (fullscreen y pantalla externa / Sidecar), en Ajustes →
-pestañas *Teleprompter* (modo Fullscreen) y *External*:
+**Prompter layout controls** for the fullscreen and external display (Sidecar) prompter, in
+Settings → *Teleprompter* tab (Fullscreen section) and → *External* tab:
 
-| Ajuste | Rango | Por defecto |
+| Setting | Range | Default |
 |---|---|---|
-| **Side Margins** | 0–35% del ancho por lado | 8% (lo que estaba fijo en el código) |
-| **Reading Line Height** | 10–95% de la altura | 50% (centrado) |
-| **Text Size** | 50–200% del tamaño automático | 100% |
+| **Side Margins** | 0–35% of the display width per side | 8% — what used to be hardcoded |
+| **Reading Line Height** | 10–95% of the display height | 50% (centered) |
+| **Text Size** | 50–200% of the automatic size | 100% |
 
-Dos cambios de comportamiento que vienen con esto:
+Two behaviour changes come with them:
 
-- En estos dos prompters, *Reading Line Height* sustituye al ajuste *Centered / Near Top* de la
-  pestaña Reading, que sigue mandando en el overlay del notch y en la ventana flotante. Si venías
-  de *Near Top*, el slider arranca en 15% la primera vez.
-- En modo clásico y voz-activada la línea activa ya no está clavada al borde inferior: sigue al
-  slider. Al 95% se comporta como antes.
+- On these two prompters, *Reading Line Height* replaces the *Centered / Near Top* reading
+  position, which still governs the notch overlay and the floating window. A build that was set to
+  *Near Top* seeds the slider at 15% the first time, so nothing moves under you.
+- In classic and voice-activated modes the active line is no longer pinned to the bottom edge: it
+  follows the setting. 95% reproduces the previous behaviour.
 
-**Actualizaciones desde este repo.** `UpdateChecker` mira las releases de este fork, no las del
-upstream. Cuando hay una versión nueva ofrece **Install and Relaunch**: descarga el `.zip` de la
-release, sustituye el propio bundle y reabre la app. Si la app está en una carpeta donde no puede
-escribir, o corre en sandbox (por ejemplo lanzada desde Xcode), ofrece descargar el DMG.
+**Updates from this repository.** `UpdateChecker` reads this fork's releases, not upstream's. When
+a newer version exists it offers **Install and Relaunch**: it downloads the release `.zip`, checks
+the bundle identifier, swaps the running bundle and reopens the app. If the app cannot rewrite
+itself — sandboxed, or installed somewhere read-only — it offers the DMG instead.
 
-**Sin App Sandbox en estas builds.** `build-local.sh` y el workflow firman ad-hoc y sin
-entitlements: es lo que le permite reescribir su propio bundle al actualizarse. Los builds desde
-Xcode (⌘R) siguen usando `Textream.entitlements`, con sandbox, como el upstream.
+**No App Sandbox in these builds.** `build-local.sh` and the release workflow sign ad-hoc with no
+entitlements, which is what lets the app replace its own bundle when it updates. Building from
+Xcode (⌘R) still uses `Textream.entitlements` and stays sandboxed, like upstream.
 
-## Compilar en local
+## Building locally
 
 ```bash
-./build-local.sh              # Release arm64 → .app + .dmg + .zip en build/
+./build-local.sh              # Release arm64 → .app + .dmg + .zip in build/
 ./build-local.sh --universal  # arm64 + Intel
-./build-local.sh --install    # además lo copia a /Applications
-./build-local.sh --help       # el resto de opciones
+./build-local.sh --install    # also copies it to /Applications
+./build-local.sh --help       # everything else
 ```
 
-Necesita Xcode 16 o superior (el target es macOS 15). Para firmar con Developer ID en vez de
+Needs Xcode 16 or newer (the deployment target is macOS 15). To sign with Developer ID instead of
 ad-hoc: `SIGNING_IDENTITY="Developer ID Application: … (TEAMID)" ./build-local.sh`.
 
-## Automatización
+## Automation
 
-| Workflow | Cuándo | Qué hace |
+| Workflow | When | What it does |
 |---|---|---|
-| `.github/workflows/drovo-sync-upstream.yml` | cada día a las 05:00 UTC, o a mano | Mergea `f/textream@master` en `master`. Si entra limpio, hace push y encadena la build. Si hay conflicto, deja `master` intacto y abre (o comenta) una issue con la etiqueta `upstream-conflict`. |
-| `.github/workflows/drovo-build.yml` | push a `master`, llamada desde el sync, o a mano | Compila universal, firma ad-hoc, empaqueta `.dmg` + `.zip` y publica la release. |
+| `.github/workflows/drovo-sync-upstream.yml` | daily at 05:00 UTC, or manually | Merges `f/textream@master` into `master`. A clean merge is pushed and hands the merged commit to the build workflow. A conflicting one leaves `master` untouched and opens (or comments on) an issue labelled `upstream-conflict`. |
+| `.github/workflows/drovo-build.yml` | push to `master`, called by the sync, or manually | Builds universal, signs ad-hoc, packages `.dmg` + `.zip` and publishes the release. |
 
-La versión es `MARKETING_VERSION` del proyecto + el número de run: `1.7.0.42`. El tag es
-`drovo-1.7.0.42` — **no** `v*`, porque el `release.yml` del upstream escucha en `v*` y aquí
-fallaría por falta de secrets.
+The version is the macOS target's `MARKETING_VERSION` plus the commit count — `1.7.0.167` — and the
+tag is `drovo-1.7.0.167`. Deliberately not `v*`: upstream's `release.yml` triggers on `v*` tags and
+would fail here without its signing secrets. The commit count is used rather than the run number
+because a reusable-workflow call runs in the caller's context, so run numbers would jump between
+two unrelated sequences and could publish a version older than the installed one.
 
-### Qué hay que habilitar una vez en GitHub
+### One-time repository setup
 
-1. Pestaña **Actions** → botón verde para habilitar los workflows del fork (GitHub los deja
-   desactivados en cualquier fork recién creado, incluidos los `schedule`).
-2. **Settings → Actions → General → Workflow permissions** → *Read and write permissions*, o el
-   push a `master` y la creación de releases fallarán con 403.
+1. **Actions** tab → enable workflows. GitHub disables them in every new fork, scheduled ones
+   included.
+2. **Settings → Actions → General → Workflow permissions** → *Read and write permissions*, or
+   pushing to `master` and creating releases fails with 403.
 
-GitHub desactiva los workflows programados en repos sin actividad durante 60 días; si el sync deja
-de correr, un `workflow_dispatch` a mano lo reactiva.
+GitHub also disables scheduled workflows in repositories with no activity for 60 days; a manual
+`workflow_dispatch` run brings the schedule back.
 
 ## Gatekeeper
 
-Las releases van firmadas ad-hoc y sin notarizar. Un DMG descargado con el navegador llega en
-cuarentena: clic derecho → Abrir la primera vez, o
-`xattr -dr com.apple.quarantine /Applications/Textream.app`. Las actualizaciones que hace la propia
-app no pasan por ahí, porque el zip lo descarga ella misma.
+Releases are ad-hoc signed and not notarized. A DMG downloaded through a browser arrives
+quarantined: right click → Open the first time, or
+`xattr -dr com.apple.quarantine /Applications/Textream.app`. Updates installed by the app itself
+skip that, because the app downloads the archive on its own.

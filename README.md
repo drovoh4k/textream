@@ -1,3 +1,20 @@
+> ### This is a fork
+>
+> [`drovoh4k/textream`](https://github.com/drovoh4k/textream) tracks
+> [`f/textream`](https://github.com/f/textream) by Fatih Kadir Akın — Textream is his work and all
+> credit for it goes there. This fork stays in sync with upstream automatically and adds:
+>
+> - **Prompter layout controls** — side margins, reading line height and text size for the
+>   fullscreen and external display prompter.
+> - **`build-local.sh`** — one command to build the app and a DMG installer locally.
+> - **In-app updates from this repository** — the app offers to install new builds itself.
+> - **Automated builds** — upstream is merged daily and every change publishes a
+>   [new release](https://github.com/drovoh4k/textream/releases/latest).
+>
+> See **[FORK.md](FORK.md)** for what changed and why.
+
+---
+
 <p align="center">
   <img src="Textream/Textream/Assets.xcassets/AppIcon.appiconset/icon_256x256.png" width="128" height="128" alt="Textream icon">
 </p>
