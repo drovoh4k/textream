@@ -1,0 +1,117 @@
+name: Sync with upstream
+
+# Merges f/textream into this fork's master once a day. If the merge is clean it pushes and
+# chains straight into the build workflow (a push made with GITHUB_TOKEN does not trigger
+# other workflows by itself). If it conflicts, master is left untouched and an issue is filed.
+
+on:
+  schedule:
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: drovo-sync
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: https://github.com/f/textream.git
+  UPSTREAM_BRANCH: master
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      merged: ${{ steps.merge.outputs.merged }}
+      sha: ${{ steps.merge.outputs.sha }}
+
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Merge upstream
+        id: merge
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git remote add upstream "$UPSTREAM_REPO"
+          git fetch --no-tags upstream "$UPSTREAM_BRANCH"
+
+          if git merge-base --is-ancestor "upstream/$UPSTREAM_BRANCH" HEAD; then
+            echo "Sin novedades en upstream."
+            echo "merged=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          UPSTREAM_SHA="$(git rev-parse --short "upstream/$UPSTREAM_BRANCH")"
+          echo "Mergeando upstream/$UPSTREAM_BRANCH ($UPSTREAM_SHA)…"
+
+          if git merge --no-edit "upstream/$UPSTREAM_BRANCH"; then
+            git push origin master
+            {
+              echo "merged=true"
+              echo "sha=$(git rev-parse HEAD)"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          CONFLICTS="$(git diff --name-only --diff-filter=U | sed 's/^/- /')"
+          git merge --abort || true
+          echo "merged=false" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "El merge automático de \`f/textream@$UPSTREAM_SHA\` ha dado conflictos, así que"
+            echo "\`master\` se ha quedado como estaba y no se ha publicado ninguna build nueva."
+            echo
+            echo "**Archivos en conflicto**"
+            echo
+            echo "$CONFLICTS"
+            echo
+            echo "Para resolverlo en local:"
+            echo
+            echo '```bash'
+            echo "git fetch upstream $UPSTREAM_BRANCH"
+            echo "git merge upstream/$UPSTREAM_BRANCH"
+            echo "# resuelve, git add …, git commit"
+            echo "git push origin master"
+            echo '```'
+            echo
+            echo "_Workflow: [$GITHUB_WORKFLOW #$GITHUB_RUN_NUMBER]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)_"
+          } > conflict.md
+
+          gh label create upstream-conflict \
+            --color B60205 \
+            --description "El merge automático del upstream necesita resolverse a mano" \
+            >/dev/null 2>&1 || true
+
+          EXISTING="$(gh issue list --label upstream-conflict --state open --limit 1 --json number --jq '.[0].number // empty')"
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file conflict.md
+          else
+            gh issue create \
+              --title "Conflicto al mergear upstream ($UPSTREAM_SHA)" \
+              --label upstream-conflict \
+              --body-file conflict.md
+          fi
+
+          exit 1
+
+  build:
+    needs: sync
+    if: needs.sync.outputs.merged == 'true'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/drovo-build.yml
+    with:
+      # Without this the called workflow would check out master as it was before the merge.
+      ref: ${{ needs.sync.outputs.sha }}

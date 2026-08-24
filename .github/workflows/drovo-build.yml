@@ -1,0 +1,181 @@
+name: Fork Build & Release
+
+# Builds this fork and publishes a release with the .dmg (to install by hand) and the
+# .zip (what the in-app updater downloads). Tags are `drovo-<version>` on purpose: the
+# upstream release workflow listens on `v*` tags and would fail here without its secrets.
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - '.github/workflows/drovo-sync-upstream.yml'
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit or ref to build. Defaults to the event's commit.
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: drovo-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # A reusable-workflow call runs in the caller's context, so the sync workflow has to
+          # tell us which commit it just merged; otherwise github.sha is the pre-merge one.
+          ref: ${{ inputs.ref || github.sha }}
+          # The build number is the commit count, so the full history has to be here.
+          fetch-depth: 0
+
+      - name: Toolchain
+        shell: bash
+        run: |
+          # Pin the same Xcode the upstream release workflow uses on this image, when present,
+          # so the fork does not drift with the runner image's default.
+          if [ -d /Applications/Xcode_16.2.app ]; then
+            sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+          fi
+          xcodebuild -version
+          sw_vers
+
+      - name: Compute version
+        id: version
+        shell: bash
+        run: |
+          # Ask the macOS target itself instead of grepping the project file, where six other
+          # targets also declare MARKETING_VERSION.
+          BASE="$(xcodebuild -project Textream/Textream.xcodeproj -target Textream \
+            -configuration Release -showBuildSettings 2>/dev/null \
+            | awk '/ MARKETING_VERSION = /{print $3; exit}')"
+          if [ -z "$BASE" ]; then
+            # Fall back to the project file rather than to a version lower than what is installed.
+            BASE="$(sed -n 's/.*MARKETING_VERSION = \([0-9][0-9.]*\);.*/\1/p' \
+              Textream/Textream.xcodeproj/project.pbxproj | sort -Vr | head -1)"
+          fi
+          if [ -z "$BASE" ]; then
+            echo "No he podido determinar MARKETING_VERSION" >&2
+            exit 1
+          fi
+          # Commit count, not run_number: it keeps increasing whichever workflow triggers this
+          # build, so published versions never go backwards.
+          BUILD="$(git rev-list --count HEAD)"
+          VERSION="${BASE}.${BUILD}"
+          {
+            echo "version=$VERSION"
+            echo "build=$BUILD"
+            echo "tag=drovo-$VERSION"
+          } >> "$GITHUB_OUTPUT"
+          echo "Textream $VERSION (commit $(git rev-parse --short HEAD))"
+
+      - name: Build universal app
+        shell: bash
+        run: |
+          mkdir -p build
+          xcodebuild build \
+            -project Textream/Textream.xcodeproj \
+            -target Textream \
+            -configuration Release \
+            ARCHS="arm64 x86_64" \
+            ONLY_ACTIVE_ARCH=NO \
+            MARKETING_VERSION="${{ steps.version.outputs.version }}" \
+            CURRENT_PROJECT_VERSION="${{ steps.version.outputs.build }}" \
+            SYMROOT="$PWD/build/Products" \
+            OBJROOT="$PWD/build/Intermediates" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            -quiet 2>&1 | tee build/xcodebuild.log
+          test -d build/Products/Release/Textream.app
+
+      - name: Sign ad-hoc
+        shell: bash
+        run: |
+          APP="build/Products/Release/Textream.app"
+          # No entitlements on purpose: without the App Sandbox the app can replace its own
+          # bundle when it updates itself. These builds are not for the App Store.
+          codesign --force --sign - "$APP"
+          codesign --verify --strict --verbose=2 "$APP"
+          lipo -archs "$APP/Contents/MacOS/Textream"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist"
+
+      - name: Package .zip and .dmg
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          APP="build/Products/Release/Textream.app"
+          mkdir -p dist
+
+          ditto -c -k --keepParent "$APP" "dist/Textream-$VERSION.zip"
+
+          STAGING="build/dmg-staging"
+          rm -rf "$STAGING"
+          mkdir -p "$STAGING"
+          cp -R "$APP" "$STAGING/"
+          ln -s /Applications "$STAGING/Applications"
+          hdiutil create \
+            -volname "Textream $VERSION" \
+            -srcfolder "$STAGING" \
+            -ov -format UDZO \
+            "dist/Textream-$VERSION.dmg"
+
+          ls -lh dist
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.tag }}"
+          {
+            echo "Build automática de este fork a partir de \`${GITHUB_SHA:0:7}\`."
+            echo
+            echo "- \`Textream-$VERSION.dmg\` — instalador: ábrelo y arrastra la app a Applications."
+            echo "- \`Textream-$VERSION.zip\` — es lo que descarga la propia app al actualizarse."
+            echo
+            echo "Firma ad-hoc, sin notarizar: la primera vez que la abras descargada del navegador,"
+            echo "clic derecho → Abrir, o \`xattr -dr com.apple.quarantine /Applications/Textream.app\`."
+            echo "Las actualizaciones hechas desde la propia app no pasan por Gatekeeper."
+          } > dist/notes.md
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # Re-run of a build whose release already exists: refresh it instead of failing.
+            gh release upload "$TAG" \
+              dist/Textream-"$VERSION".dmg \
+              dist/Textream-"$VERSION".zip \
+              --clobber
+            gh release edit "$TAG" \
+              --title "Textream $VERSION" \
+              --notes-file dist/notes.md \
+              --latest
+          else
+            gh release create "$TAG" \
+              dist/Textream-"$VERSION".dmg \
+              dist/Textream-"$VERSION".zip \
+              --title "Textream $VERSION" \
+              --notes-file dist/notes.md \
+              --target "$(git rev-parse HEAD)" \
+              --latest
+          fi
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: build/xcodebuild.log
+          if-no-files-found: ignore
