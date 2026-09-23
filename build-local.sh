@@ -73,8 +73,20 @@ if ! xcodebuild -version >>"$LOG" 2>&1; then
 fi
 XCODE_VERSION="$(head -1 "$LOG")"
 
+# Use the release workflow's version scheme. Otherwise a local 1.7.0 build offers
+# the older published 1.7.0.N as an update and replaces local changes on install.
+BASE_VERSION="$(xcodebuild -project "$PROJ" -target Textream \
+  -configuration "$CONFIG" -showBuildSettings 2>>"$LOG" \
+  | awk '/ MARKETING_VERSION = /{print $3; exit}')"
+BUILD_NUMBER="$(git rev-list --count HEAD)"
+if [ -z "$BASE_VERSION" ] || [ -z "$BUILD_NUMBER" ]; then
+  echo "❌ No he podido determinar la versión local. Consulta $LOG"
+  exit 1
+fi
+LOCAL_VERSION="${BASE_VERSION}.${BUILD_NUMBER}"
+
 # ---------------------------------------------------------------- compilación
-echo "🔨 $XCODE_VERSION · $CONFIG · $ARCH_LABEL"
+echo "🔨 $XCODE_VERSION · $CONFIG · $ARCH_LABEL · $LOCAL_VERSION"
 echo "   compilando…  (log: ${LOG#"$PWD"/})"
 xcodebuild build \
   -project "$PROJ" \
@@ -82,6 +94,8 @@ xcodebuild build \
   -configuration "$CONFIG" \
   ARCHS="$ARCHS_LIST" \
   ONLY_ACTIVE_ARCH=NO \
+  MARKETING_VERSION="$LOCAL_VERSION" \
+  CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
   SYMROOT="$BUILD_DIR/Products" \
   OBJROOT="$BUILD_DIR/Intermediates" \
   CODE_SIGNING_ALLOWED=NO \

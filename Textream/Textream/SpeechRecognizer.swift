@@ -86,6 +86,7 @@ class SpeechRecognizer {
     var lastSpokenText: String = ""
     var shouldDismiss: Bool = false
     var shouldAdvancePage: Bool = false
+    var isManuallyScrolling: Bool = false
 
     /// True when recent audio levels indicate the user is actively speaking
     var isSpeaking: Bool {
@@ -181,6 +182,7 @@ class SpeechRecognizer {
         matchStartOffset = recognizedCharCount
         retryCount = 0
         recentMatchPositions = []
+        isManuallyScrolling = false
         error = nil
         sessionGeneration &+= 1
         shouldListen = true
@@ -266,6 +268,7 @@ class SpeechRecognizer {
 
     func stop() {
         shouldListen = false
+        isManuallyScrolling = false
         sessionGeneration &+= 1
         isListening = false
         isStarting = false
@@ -274,6 +277,7 @@ class SpeechRecognizer {
 
     func forceStop() {
         shouldListen = false
+        isManuallyScrolling = false
         sessionGeneration &+= 1
         isListening = false
         isStarting = false
@@ -769,6 +773,9 @@ class SpeechRecognizer {
     // MARK: - Fuzzy character-level matching
 
     private func matchCharacters(spoken fullSpoken: String) {
+        // Keep the transcript current while the user chooses where to resume.
+        guard !isManuallyScrolling else { return }
+
         // Results computed before a jump can be delivered just after it —
         // don't match pre-jump speech against the text at the new offset.
         guard Date().timeIntervalSince(lastJumpAt) > 0.3 else { return }

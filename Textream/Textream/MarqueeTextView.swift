@@ -114,6 +114,13 @@ struct WordYPreferenceKey: PreferenceKey {
     }
 }
 
+private struct ScrollContentBoundsKey: PreferenceKey {
+    static var defaultValue: ClosedRange<CGFloat> = 0...0
+    static func reduce(value: inout ClosedRange<CGFloat>, nextValue: () -> ClosedRange<CGFloat>) {
+        value = nextValue()
+    }
+}
+
 // MARK: - Teleprompter
 
 struct SpeechScrollView: View {
@@ -125,10 +132,10 @@ struct SpeechScrollView: View {
     var cueUnreadOpacity: Double = 0.2
     var cueReadOpacity: Double = 0.5
     var onWordTap: ((Int) -> Void)? = nil
-    /// Called when user starts/stops manual scrolling in smooth mode.
-    /// Bool: true = scrolling started (pause timer), false = scrolling ended (resume timer).
-    /// Double: new word progress to resume from (only meaningful when false).
-    var onManualScroll: ((Bool, Double) -> Void)? = nil
+    /// Called when user starts/stops manual scrolling in either follow mode.
+    /// Bool: true = scrolling started (hold progress), false = scrolling ended (resume).
+    /// Double: new word progress when ending; nil cancels without seeking.
+    var onManualScroll: ((Bool, Double?) -> Void)? = nil
     var smoothScroll: Bool = false
     /// Continuous word progress (e.g. 3.7 = 70% through 4th word). Drives scroll in smooth mode.
     var smoothWordProgress: Double = 0
@@ -144,6 +151,7 @@ struct SpeechScrollView: View {
     @State private var scrollOffset: CGFloat = 0
     @State private var manualOffset: CGFloat = 0
     @State private var wordYPositions: [Int: CGFloat] = [:]
+    @State private var contentYBounds: ClosedRange<CGFloat> = 0...0
     @State private var containerHeight: CGFloat = 0
     @State private var isUserScrolling: Bool = false
     @State private var stableTopLineCenter: CGFloat?
@@ -163,6 +171,7 @@ struct SpeechScrollView: View {
     }
 
     private var scrollOffsetAnimation: Animation? {
+        if isUserScrolling { return nil }
         if isAnimatingReadingPositionChange {
             return readingPositionTransitionAnimation
         }
@@ -183,6 +192,7 @@ struct SpeechScrollView: View {
                 paragraphBreakBeforeWordIndices: paragraphBreakBeforeWordIndices,
                 containerWidth: geo.size.width,
                 onWordTap: { charOffset in
+                    cancelManualScroll()
                     let tappedWordIndex = wordIndex(at: charOffset)
                     manualOffset = 0
                     if charOffset < highlightedCharCount {
@@ -198,6 +208,7 @@ struct SpeechScrollView: View {
                 scrollOffset: scrollOffset + manualOffset,
                 viewportHeight: geo.size.height
             )
+            .onPreferenceChange(ScrollContentBoundsKey.self) { contentYBounds = $0 }
             .onPreferenceChange(WordYPreferenceKey.self) { positions in
                 let wasEmpty = wordYPositions.isEmpty
                 let widthChanged = abs(anchoredLayoutWidth - geo.size.width) > 0.5
@@ -220,7 +231,7 @@ struct SpeechScrollView: View {
             }
             .offset(y: scrollOffset + manualOffset)
             .animation(scrollOffsetAnimation, value: scrollOffset)
-            .animation(.easeOut(duration: 0.15), value: manualOffset)
+            .animation(isUserScrolling ? nil : .easeOut(duration: 0.15), value: manualOffset)
             .onChange(of: geo.size.height) { _, newHeight in
                 containerHeight = newHeight
                 hasAppliedTrackingTarget = false
@@ -230,25 +241,28 @@ struct SpeechScrollView: View {
                     recalculateTracking(containerHeight: newHeight)
                 }
             }
-            .onChange(of: highlightedCharCount) { _, _ in
-                if isListening && !smoothScroll {
+            .onChange(of: highlightedCharCount) { oldCount, newCount in
+                if isListening && !smoothScroll && !isUserScrolling {
                     manualOffset = 0
+                    // A seek from another prompter sharing this recognizer also rewinds this view.
+                    if newCount < oldCount { allowsNextBackwardTrackingUpdate = true }
                     recalculateTracking(containerHeight: containerHeight)
                 }
             }
             .onChange(of: smoothWordProgress) { _, _ in
-                if isListening && smoothScroll {
+                if isListening && smoothScroll && !isUserScrolling {
                     manualOffset = 0
                     recalculateTracking(containerHeight: containerHeight)
                 }
             }
             .onChange(of: isListening) { _, listening in
-                if listening {
+                if listening && !isUserScrolling {
                     manualOffset = 0
                     recalculateTracking(containerHeight: containerHeight)
                 }
             }
             .onChange(of: words) { _, _ in
+                cancelManualScroll()
                 scrollOffset = initialScrollOffset(containerHeight: containerHeight)
                 manualOffset = 0
                 wordYPositions = [:]
@@ -259,6 +273,7 @@ struct SpeechScrollView: View {
                 anchoredLayoutWidth = 0
                 anchoredParagraphBreakBeforeWordIndices = []
             }
+            .onChange(of: smoothScroll) { _, _ in cancelManualScroll() }
             .onChange(of: readingPosition) { _, _ in
                 guard readingAnchorFraction == nil else { return }
                 manualOffset = 0
@@ -314,57 +329,40 @@ struct SpeechScrollView: View {
                 containerHeight = geo.size.height
                 scrollOffset = initialScrollOffset(containerHeight: containerHeight)
             }
+            .onDisappear { cancelManualScroll() }
             .overlay(
                 ScrollWheelView(
                     onScroll: { delta in
-                        let canScroll = smoothScroll ? isListening : !isListening
-                        guard canScroll else { return }
+                        guard delta != 0, !words.isEmpty else { return }
+                        guard !smoothScroll || isListening else { return }
 
-                        // Pause timer when user starts scrolling in smooth mode
-                        if smoothScroll && !isUserScrolling {
+                        if !isUserScrolling {
                             isUserScrolling = true
-                            onManualScroll?(true, 0)
+                            onManualScroll?(true, nil)
                         }
 
-                        let maxY = wordYPositions.values.max() ?? 0
-                        let containerHeight = geo.size.height
-                        let maxUp = containerHeight * 0.5
-                        let maxDown = max(0, maxY - containerHeight * 0.5)
-
-                        let newOffset = manualOffset + delta
-                        let upperBound = maxUp
-                        let lowerBound = -maxDown
-
-                        if newOffset > upperBound {
-                            let over = newOffset - upperBound
-                            manualOffset = upperBound + over * 0.2
-                        } else if newOffset < lowerBound {
-                            let over = lowerBound - newOffset
-                            manualOffset = lowerBound - over * 0.2
-                        } else {
-                            manualOffset = newOffset
-                        }
+                        // Bound the total offset, so one gesture can rewind the whole script.
+                        let target = Self.clampedScrollOffset(
+                            scrollOffset + manualOffset + delta,
+                            anchorY: trackingAnchorY,
+                            contentBounds: contentYBounds
+                        )
+                        manualOffset = target - scrollOffset
                     },
                     onScrollEnd: {
-                        if smoothScroll && isUserScrolling {
-                            // Find the word at the active tracking anchor.
-                            let newProgress = wordProgressAtCurrentOffset()
-                            withAnimation(.easeOut(duration: 0.15)) {
-                                manualOffset = 0
-                            }
+                        guard isUserScrolling else { return }
+                        let newProgress = wordProgressAtCurrentOffset()
+                        // Commit the visual position before the parent publishes its new progress.
+                        var transaction = Transaction(animation: nil)
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) {
+                            scrollOffset += manualOffset
+                            manualOffset = 0
                             isUserScrolling = false
                             allowsNextBackwardTrackingUpdate = true
                             onManualScroll?(false, newProgress)
-                        } else {
-                            let maxY = wordYPositions.values.max() ?? 0
-                            let containerHeight = geo.size.height
-                            let upperBound = containerHeight * 0.5
-                            let lowerBound = -max(0, maxY - containerHeight * 0.5)
-
-                            if manualOffset > upperBound || manualOffset < lowerBound {
-                                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                                    manualOffset = min(upperBound, max(lowerBound, manualOffset))
-                                }
+                            if !smoothScroll {
+                                repositionTracking(toWordIndex: Int(newProgress))
                             }
                         }
                     }
@@ -409,6 +407,7 @@ struct SpeechScrollView: View {
     }
 
     private func recalculateTracking(containerHeight: CGFloat) {
+        guard !isUserScrolling else { return }
         if let fraction = readingAnchorFraction {
             recalcAtAnchor(containerHeight * fraction)
             return
@@ -564,24 +563,59 @@ struct SpeechScrollView: View {
         return max(0, words.count - 1)
     }
 
-    /// Find the word progress at the current visual position (scrollOffset + manualOffset)
-    private func wordProgressAtCurrentOffset() -> Double {
-        let trackingY: CGFloat
+    private var trackingAnchorY: CGFloat {
         if let fraction = readingAnchorFraction {
-            trackingY = containerHeight * fraction
+            return containerHeight * fraction
         } else {
             switch readingPosition {
             case .centered:
-                trackingY = containerHeight * 0.5
+                return smoothScroll ? containerHeight - 20 : containerHeight * 0.5
             case .nearTop:
-                trackingY = topReadingAnchor
+                return topReadingAnchor
             }
         }
-        let targetY = trackingY - (scrollOffset + manualOffset)
+    }
+
+    static func clampedScrollOffset(
+        _ proposed: CGFloat, anchorY: CGFloat, contentBounds: ClosedRange<CGFloat>
+    ) -> CGFloat {
+        min(anchorY - contentBounds.lowerBound, max(anchorY - contentBounds.upperBound, proposed))
+    }
+
+    private func cancelManualScroll() {
+        guard isUserScrolling else { return }
+        isUserScrolling = false
+        manualOffset = 0
+        onManualScroll?(false, nil)
+    }
+
+    /// Find the word progress at the current visual position (scrollOffset + manualOffset).
+    private func wordProgressAtCurrentOffset() -> Double {
+        Self.wordProgress(
+            at: trackingAnchorY - (scrollOffset + manualOffset),
+            positions: wordYPositions,
+            smooth: smoothScroll,
+            fallback: smoothScroll ? smoothWordProgress : Double(activeWordIndex())
+        )
+    }
+
+    static func wordProgress(
+        at targetY: CGFloat, positions: [Int: CGFloat], smooth: Bool, fallback: Double
+    ) -> Double {
+        // Resume voice tracking at the first word of the nearest visible line.
+        if !smooth {
+            let closest = positions.min { lhs, rhs in
+                let leftDistance = abs(lhs.value - targetY)
+                let rightDistance = abs(rhs.value - targetY)
+                return leftDistance == rightDistance
+                    ? lhs.key < rhs.key : leftDistance < rightDistance
+            }
+            return closest.map { Double($0.key) } ?? fallback
+        }
 
         // Find the closest word and interpolate
-        let sorted = wordYPositions.sorted { $0.key < $1.key }
-        guard !sorted.isEmpty else { return smoothWordProgress }
+        let sorted = positions.sorted { $0.key < $1.key }
+        guard !sorted.isEmpty else { return fallback }
 
         for i in 0..<sorted.count {
             let (wordIdx, wordY) = sorted[i]
@@ -599,7 +633,7 @@ struct SpeechScrollView: View {
         if targetY < (sorted.first?.value ?? 0) {
             return 0
         }
-        return Double(words.count)
+        return fallback
     }
 
     private func activeWordIndex() -> Int {
@@ -818,6 +852,11 @@ struct WordFlowLayout: View {
         }
         .frame(maxWidth: .infinity, alignment: rtl ? .trailing : .leading)
         .coordinateSpace(name: "flowLayout")
+        // These bounds include culled lines, so long/fast scrolls cannot leave the script.
+        .preference(
+            key: ScrollContentBoundsKey.self,
+            value: (rowHeight * 0.5)...max(rowHeight * 0.5, totalContentHeight - rowHeight * 0.5)
+        )
     }
 
     private func wordView(for item: WordItem, isNextWord: Bool) -> some View {
@@ -1032,6 +1071,8 @@ class ScrollWheelNSView: NSView {
     var onScroll: ((CGFloat) -> Void)?
     var onScrollEnd: (() -> Void)?
     private var scrollMonitor: Any?
+    private var scrollEndTimer: Timer?
+    private var isScrolling = false
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -1040,20 +1081,46 @@ class ScrollWheelNSView: NSView {
                 guard let self, let window = self.window else { return event }
                 // Only handle if event is in our window
                 if event.window == window {
-                    let delta = event.scrollingDeltaY
-                    let scaled = event.hasPreciseScrollingDeltas ? delta : delta * 10
-                    self.onScroll?(scaled)
-
-                    if event.phase == .ended || event.momentumPhase == .ended {
-                        self.onScrollEnd?()
-                    }
+                    self.handleScroll(event)
                 }
                 return event
             }
         }
     }
 
+    func handleScroll(_ event: NSEvent) {
+        let delta = event.scrollingDeltaY
+        if delta != 0 {
+            isScrolling = true
+            onScroll?(event.hasPreciseScrollingDeltas ? delta : delta * 10)
+        }
+        guard isScrolling else { return }
+        scrollEndTimer?.invalidate()
+
+        if event.momentumPhase.contains(.ended) || event.phase.contains(.cancelled) {
+            finishScroll()
+        } else if event.phase.isEmpty && event.momentumPhase.isEmpty || event.phase.contains(.ended) {
+            // A wheel has no phases. The delay also joins a trackpad gesture to its momentum.
+            let timer = Timer(timeInterval: 0.2, repeats: false) { [weak self] _ in
+                self?.finishScroll()
+            }
+            scrollEndTimer = timer
+            RunLoop.main.add(timer, forMode: .common)
+        }
+    }
+
+    private func finishScroll() {
+        scrollEndTimer?.invalidate()
+        scrollEndTimer = nil
+        guard isScrolling else { return }
+        isScrolling = false
+        onScrollEnd?()
+    }
+
     override func removeFromSuperview() {
+        scrollEndTimer?.invalidate()
+        scrollEndTimer = nil
+        isScrolling = false
         if let monitor = scrollMonitor {
             NSEvent.removeMonitor(monitor)
             scrollMonitor = nil

@@ -261,8 +261,13 @@ struct ExternalDisplayView: View {
                     },
                     onManualScroll: { scrolling, newProgress in
                         isUserScrolling = scrolling
-                        if !scrolling {
-                            timerWordProgress = max(0, min(Double(words.count), newProgress))
+                        speechRecognizer.isManuallyScrolling = scrolling && listeningMode == .wordTracking
+                        guard !scrolling, let newProgress else { return }
+                        let progress = max(0, min(Double(words.count), newProgress))
+                        if listeningMode == .wordTracking {
+                            speechRecognizer.jumpTo(charOffset: charOffsetForWordProgress(progress))
+                        } else {
+                            timerWordProgress = progress
                         }
                     },
                     smoothScroll: listeningMode != .wordTracking,

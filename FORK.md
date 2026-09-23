@@ -2,10 +2,15 @@
 
 This repository is a fork of [`f/textream`](https://github.com/f/textream) by Fatih Kadir Akın.
 Textream itself — the app, the design, the teleprompter engine — is his work; this fork only adds
-a few settings, a local build script, and the automation that keeps it in sync with upstream and
-publishes builds.
+a few settings and reading controls, a local build script, and the automation that keeps it in
+sync with upstream and publishes builds.
 
 ## What this fork adds
+
+**Scroll to rewind while following your voice.** Use the trackpad or mouse wheel over the Mac
+prompter to return to an earlier line. Voice progress pauses during the gesture, then resumes
+from the selected line without turning off the microphone. This works in the notch, floating,
+fullscreen, and external display prompters.
 
 **Prompter layout controls** for the fullscreen and external display (Sidecar) prompter, in
 Settings → *Teleprompter* tab (Fullscreen section) and → *External* tab:
@@ -44,6 +49,11 @@ Xcode (⌘R) still uses `Textream.entitlements` and stays sandboxed, like upstre
 
 Needs Xcode 16 or newer (the deployment target is macOS 15). To sign with Developer ID instead of
 ad-hoc: `SIGNING_IDENTITY="Developer ID Application: … (TEAMID)" ./build-local.sh`.
+
+Local builds use the same commit-count version as releases, so an older published build is not
+offered as an update over local changes.
+
+Run `./tests/check-manual-scroll.sh` for the scroll and voice-rewind regression checks.
 
 ## Automation
 
