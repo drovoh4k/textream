@@ -2,7 +2,8 @@ name: Sync with upstream
 
 # Merges f/textream into this fork's master once a day. If the merge is clean it pushes and
 # chains straight into the build workflow (a push made with GITHUB_TOKEN does not trigger
-# other workflows by itself). If it conflicts, master is left untouched and an issue is filed.
+# other workflows by itself). Conflicts leave master untouched and appear in the run summary,
+# with an issue as well when the repository has issues enabled.
 
 on:
   schedule:
@@ -63,13 +64,21 @@ jobs:
               echo "sha=$(git rev-parse HEAD)"
             } >> "$GITHUB_OUTPUT"
             exit 0
+          else
+            MERGE_STATUS=$?
           fi
 
           CONFLICTS="$(git diff --name-only --diff-filter=U | sed 's/^/- /')"
-          git merge --abort || true
+          if [ -z "$CONFLICTS" ]; then
+            echo "::error::El merge ha fallado sin conflictos; revisa el error de Git."
+            exit "$MERGE_STATUS"
+          fi
+          git merge --abort
           echo "merged=false" >> "$GITHUB_OUTPUT"
+          MARKER="<!-- upstream-conflict:$(git rev-parse "upstream/$UPSTREAM_BRANCH") -->"
 
           {
+            echo "$MARKER"
             echo "El merge automático de \`f/textream@$UPSTREAM_SHA\` ha dado conflictos, así que"
             echo "\`master\` se ha quedado como estaba y no se ha publicado ninguna build nueva."
             echo
@@ -88,23 +97,33 @@ jobs:
             echo
             echo "_Workflow: [$GITHUB_WORKFLOW #$GITHUB_RUN_NUMBER]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)_"
           } > conflict.md
+          cat conflict.md >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning::Upstream necesita resolver conflictos a mano. Master sigue intacto; consulta el resumen."
 
-          gh label create upstream-conflict \
-            --color B60205 \
-            --description "El merge automático del upstream necesita resolverse a mano" \
-            >/dev/null 2>&1 || true
+          ISSUES_ENABLED="$(gh repo view "$GITHUB_REPOSITORY" --json hasIssuesEnabled --jq '.hasIssuesEnabled')"
+          if [ "$ISSUES_ENABLED" = "false" ]; then
+            echo "Issues desactivadas en este repositorio; el conflicto queda registrado en este resumen." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
 
           EXISTING="$(gh issue list --label upstream-conflict --state open --limit 1 --json number --jq '.[0].number // empty')"
+          TITLE="Conflicto al mergear upstream ($UPSTREAM_SHA)"
           if [ -n "$EXISTING" ]; then
-            gh issue comment "$EXISTING" --body-file conflict.md
+            BODY="$(gh issue view "$EXISTING" --json body --jq '.body')"
+            if [[ "$BODY" != *"$MARKER"* ]]; then
+              gh issue edit "$EXISTING" --title "$TITLE" --body-file conflict.md
+            fi
           else
+            gh label create upstream-conflict --force \
+              --color B60205 \
+              --description "El merge automático del upstream necesita resolverse a mano"
             gh issue create \
-              --title "Conflicto al mergear upstream ($UPSTREAM_SHA)" \
+              --title "$TITLE" \
               --label upstream-conflict \
               --body-file conflict.md
           fi
 
-          exit 1
+          exit 0
 
   build:
     needs: sync

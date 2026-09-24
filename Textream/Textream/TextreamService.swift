@@ -12,6 +12,7 @@ import UniformTypeIdentifiers
 
 class TextreamService: NSObject, ObservableObject {
     static let shared = TextreamService()
+    private static let lastDocumentURLDefaultsKey = "lastDocumentURL"
     let overlayController = NotchOverlayController()
     let externalDisplayController = ExternalDisplayController()
     let browserServer = BrowserServer()
@@ -141,14 +142,16 @@ class TextreamService: NSObject, ObservableObject {
     }
 
     func updatePageInfo() {
-        let content = overlayController.overlayContent
-        content.pageCount = pages.count
-        content.currentPageIndex = currentPageIndex
-        content.pagePreviews = pages.enumerated().map { (i, text) in
+        let pagePreviews = pages.enumerated().map { (i, text) in
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty { return "" }
             let preview = String(trimmed.prefix(40))
             return preview + (trimmed.count > 40 ? "…" : "")
+        }
+        for content in [overlayController.overlayContent, externalDisplayController.overlayContent] {
+            content.pageCount = pages.count
+            content.currentPageIndex = currentPageIndex
+            content.pagePreviews = pagePreviews
         }
     }
 
@@ -172,6 +175,27 @@ class TextreamService: NSObject, ObservableObject {
 
     // MARK: - File Operations
 
+    private var lastDocumentDirectoryURL: URL? {
+        guard let path = UserDefaults.standard.string(forKey: Self.lastDocumentURLDefaultsKey),
+              !path.isEmpty else { return nil }
+
+        let directoryURL = URL(fileURLWithPath: path).deletingLastPathComponent()
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(
+            atPath: directoryURL.path,
+            isDirectory: &isDirectory
+        ), isDirectory.boolValue else { return nil }
+        return directoryURL
+    }
+
+    func rememberDocumentURL(_ url: URL) {
+        guard url.isFileURL else { return }
+        UserDefaults.standard.set(
+            url.standardizedFileURL.path,
+            forKey: Self.lastDocumentURLDefaultsKey
+        )
+    }
+
     func saveFile() {
         if let url = currentFileURL {
             saveToURL(url)
@@ -185,6 +209,8 @@ class TextreamService: NSObject, ObservableObject {
         panel.allowedContentTypes = [.init(filenameExtension: "textream")!]
         panel.nameFieldStringValue = "Untitled.textream"
         panel.canCreateDirectories = true
+        panel.directoryURL = currentFileURL?.deletingLastPathComponent()
+            ?? lastDocumentDirectoryURL
 
         panel.begin { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
@@ -198,6 +224,7 @@ class TextreamService: NSObject, ObservableObject {
             try data.write(to: url, options: .atomic)
             currentFileURL = url
             savedPages = pages
+            rememberDocumentURL(url)
             NSDocumentController.shared.noteNewRecentDocumentURL(url)
         } catch {
             let alert = NSAlert()
@@ -222,6 +249,8 @@ class TextreamService: NSObject, ObservableObject {
         ]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
+        panel.directoryURL = currentFileURL?.deletingLastPathComponent()
+            ?? lastDocumentDirectoryURL
 
         panel.begin { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
@@ -250,6 +279,7 @@ class TextreamService: NSObject, ObservableObject {
                     self?.currentPageIndex = 0
                     self?.readPages.removeAll()
                     self?.currentFileURL = nil
+                    self?.rememberDocumentURL(url)
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -297,6 +327,7 @@ class TextreamService: NSObject, ObservableObject {
             currentPageIndex = 0
             readPages.removeAll()
             currentFileURL = url
+            rememberDocumentURL(url)
             NSDocumentController.shared.noteNewRecentDocumentURL(url)
         } catch {
             let alert = NSAlert()

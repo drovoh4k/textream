@@ -9,6 +9,13 @@ import AppKit
 import SwiftUI
 import Combine
 
+/// A nonactivating panel that can still receive keyboard and control events.
+/// This keeps the prompter interactive while another app (for example, a
+/// screen recorder) remains the active application.
+final class PrompterPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+}
+
 @Observable
 class NotchFrameTracker {
     var visibleHeight: CGFloat = 37 {
@@ -253,7 +260,7 @@ class NotchOverlayController: NSObject {
         let targetHeight = menuBarHeight + textAreaHeight
         let targetY = screenFrame.maxY - targetHeight
         let xPosition = screenFrame.midX - notchWidth / 2
-        let panel = NSPanel(
+        let panel = PrompterPanel(
             contentRect: NSRect(x: xPosition, y: targetY, width: notchWidth, height: targetHeight),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
@@ -301,7 +308,7 @@ class NotchOverlayController: NSObject {
         )
         let contentView = NSHostingView(rootView: floatingView)
 
-        let panel = NSPanel(
+        let panel = PrompterPanel(
             contentRect: initialFrame,
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
@@ -329,11 +336,12 @@ class NotchOverlayController: NSObject {
         let fullscreenView = ExternalDisplayView(
             content: overlayContent,
             speechRecognizer: speechRecognizer,
-            mirrorAxis: nil
+            mirrorAxis: nil,
+            handlesAutoNextPage: true
         )
         let contentView = NSHostingView(rootView: fullscreenView)
 
-        let panel = NSPanel(
+        let panel = PrompterPanel(
             contentRect: screenFrame,
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
@@ -368,7 +376,7 @@ class NotchOverlayController: NSObject {
         )
         let contentView = NSHostingView(rootView: floatingView)
 
-        let panel = NSPanel(
+        let panel = PrompterPanel(
             contentRect: NSRect(x: xPosition, y: yPosition, width: panelWidth, height: panelHeight),
             styleMask: [.borderless, .nonactivatingPanel, .resizable],
             backing: .buffered,
@@ -538,7 +546,7 @@ class NotchOverlayController: NSObject {
             self.dismiss()
         })
 
-        let panel = NSPanel(
+        let panel = PrompterPanel(
             contentRect: NSRect(x: x, y: y, width: buttonSize, height: buttonSize),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
@@ -895,6 +903,10 @@ struct NotchOverlayView: View {
         .onChange(of: content.totalCharCount) { _, _ in
             timerWordProgress = 0
         }
+        .onChange(of: content.currentPageIndex) { _, _ in
+            timerWordProgress = 0
+            isUserScrolling = false
+        }
     }
 
     private var isEffectivelyListening: Bool {
@@ -942,6 +954,7 @@ struct NotchOverlayView: View {
                     ? content.paragraphBreakBeforeWordIndices
                     : []
             )
+            .id(content.currentPageIndex)
             .padding(.horizontal, 12)
             .padding(.top, 6)
             .mask {
@@ -1175,6 +1188,13 @@ struct NotchOverlayView: View {
     private func startCountdown() {
         countdownTimer?.invalidate()
         countdownRemaining = NotchSettings.shared.autoNextPageDelay
+        guard countdownRemaining > 0 else {
+            countdownTimer = nil
+            DispatchQueue.main.async {
+                speechRecognizer.shouldAdvancePage = true
+            }
+            return
+        }
         countdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
             DispatchQueue.main.async {
                 countdownRemaining -= 1
@@ -1418,6 +1438,10 @@ struct FloatingOverlayView: View {
         .onChange(of: content.totalCharCount) { _, _ in
             timerWordProgress = 0
         }
+        .onChange(of: content.currentPageIndex) { _, _ in
+            timerWordProgress = 0
+            isUserScrolling = false
+        }
     }
 
     private var floatingPrompterView: some View {
@@ -1456,6 +1480,7 @@ struct FloatingOverlayView: View {
                     ? content.paragraphBreakBeforeWordIndices
                     : []
             )
+            .id(content.currentPageIndex)
             .padding(.horizontal, 16)
             .padding(.top, 12)
 
@@ -1590,6 +1615,13 @@ struct FloatingOverlayView: View {
     private func startCountdown() {
         countdownTimer?.invalidate()
         countdownRemaining = NotchSettings.shared.autoNextPageDelay
+        guard countdownRemaining > 0 else {
+            countdownTimer = nil
+            DispatchQueue.main.async {
+                speechRecognizer.shouldAdvancePage = true
+            }
+            return
+        }
         countdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
             DispatchQueue.main.async {
                 countdownRemaining -= 1

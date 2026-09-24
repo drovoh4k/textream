@@ -59,7 +59,7 @@ Run `./tests/check-manual-scroll.sh` for the scroll and voice-rewind regression 
 
 | Workflow | When | What it does |
 |---|---|---|
-| `.github/workflows/drovo-sync-upstream.yml` | daily at 05:00 UTC, or manually | Merges `f/textream@master` into `master`. A clean merge is pushed and hands the merged commit to the build workflow. A conflicting one leaves `master` untouched and opens (or comments on) an issue labelled `upstream-conflict`. |
+| `.github/workflows/drovo-sync-upstream.yml` | daily at 05:00 UTC, or manually | Merges `f/textream@master` into `master`. A clean merge is pushed and hands the merged commit to the build workflow. A conflict leaves `master` untouched and is recorded in the run summary, plus a deduplicated `upstream-conflict` issue when issues are enabled. Conflicts do not trigger repeated failed-run emails; unexpected errors still fail. |
 | `.github/workflows/drovo-build.yml` | push to `master`, called by the sync, or manually | Builds universal, signs ad-hoc, packages `.dmg` + `.zip` and publishes the release. |
 
 The version is the macOS target's `MARKETING_VERSION` plus the commit count — `1.7.0.167` — and the
